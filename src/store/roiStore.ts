@@ -134,6 +134,35 @@ export const useROIStore = create<ROIStore>()(
       importProject: (project) =>
         set((s) => { s.project = project; }),
     })),
-    { name: 'roi-planner-v1' }
+    {
+      name: 'roi-planner-v1',
+      merge: (persisted: unknown, current) => {
+        // Migrate old shape (totalPosLanes/totalScoLanes) to new shape
+        const p = persisted as Record<string, unknown>;
+        if (!p || typeof p !== 'object') return current;
+        const proj = p.project as Record<string, unknown> | undefined;
+        if (!proj) return current;
+        const cfg = proj.config as Record<string, unknown> | undefined;
+        if (cfg && ('totalPosLanes' in cfg || !('laneTypes' in cfg))) {
+          // Old format — reset to default to avoid crashes
+          return current;
+        }
+        // Also migrate phases with old posLanesAdded/scoLanesAdded
+        const phases = proj.phases as Array<Record<string, unknown>> | undefined;
+        if (Array.isArray(phases)) {
+          for (const phase of phases) {
+            const deltas = phase.monthDeltas as Array<Record<string, unknown>> | undefined;
+            if (Array.isArray(deltas)) {
+              for (const d of deltas) {
+                if ('posLanesAdded' in d || 'scoLanesAdded' in d) {
+                  return current;
+                }
+              }
+            }
+          }
+        }
+        return { ...current, ...(persisted as object) };
+      },
+    }
   )
 );

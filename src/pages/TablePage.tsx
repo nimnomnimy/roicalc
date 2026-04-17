@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, Fragment } from 'react';
 import { useROIStore } from '../store/roiStore';
 import { computeTimeline } from '../engine/timelineEngine';
 import { formatCurrency } from '../utils/format';
@@ -116,14 +116,14 @@ export function TablePage() {
             <tr className="bg-gray-50 border-b border-gray-200">
               <th className="text-left px-4 py-3 font-medium text-gray-600 whitespace-nowrap">Month</th>
               {laneTypes.map((lt) => (
-                <>
-                  <th key={`exist-${lt.id}`} className="text-right px-4 py-3 font-medium text-gray-500 text-xs whitespace-nowrap">
+                <Fragment key={lt.id}>
+                  <th className="text-right px-4 py-3 font-medium text-gray-500 text-xs whitespace-nowrap">
                     Exist. {lt.name}
                   </th>
-                  <th key={`new-${lt.id}`} className="text-right px-4 py-3 font-medium text-gray-500 text-xs whitespace-nowrap">
+                  <th className="text-right px-4 py-3 font-medium text-gray-500 text-xs whitespace-nowrap">
                     New {lt.name}
                   </th>
-                </>
+                </Fragment>
               ))}
               <th className="text-right px-4 py-3 font-medium text-red-500 whitespace-nowrap">
                 Existing Cost <span className="text-gray-400 font-normal text-xs">↗ click</span>
@@ -138,21 +138,20 @@ export function TablePage() {
           </thead>
           <tbody className="divide-y divide-gray-100">
             {timeline.rows.map((row) => (
-              <>
+              <Fragment key={row.monthIndex}>
                 <tr
-                  key={row.monthIndex}
                   className={`hover:bg-gray-50 ${drill?.monthIndex === row.monthIndex ? 'bg-gray-50' : ''}`}
                 >
                   <td className="px-4 py-2.5 font-medium text-gray-800 whitespace-nowrap">{row.label}</td>
                   {laneTypes.map((lt) => (
-                    <>
-                      <td key={`exist-${lt.id}`} className="px-4 py-2.5 text-right text-gray-500 text-xs">
+                    <Fragment key={lt.id}>
+                      <td className="px-4 py-2.5 text-right text-gray-500 text-xs">
                         {(row.existingLanes[lt.id] ?? 0).toLocaleString()}
                       </td>
-                      <td key={`new-${lt.id}`} className="px-4 py-2.5 text-right text-gray-500 text-xs">
+                      <td className="px-4 py-2.5 text-right text-gray-500 text-xs">
                         {(row.newLanes[lt.id] ?? 0).toLocaleString()}
                       </td>
-                    </>
+                    </Fragment>
                   ))}
 
                   <td
@@ -195,7 +194,7 @@ export function TablePage() {
                     onClose={() => setDrill(null)}
                   />
                 )}
-              </>
+              </Fragment>
             ))}
           </tbody>
           <tfoot>

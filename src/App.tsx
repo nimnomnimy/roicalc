@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, Fragment } from 'react';
 import { CostsPage } from './pages/CostsPage';
 import { PhasesPage } from './pages/PhasesPage';
 import { ChartPage } from './pages/ChartPage';
@@ -205,12 +205,12 @@ export default function App() {
 
         <div className="ml-auto flex items-center gap-3">
           {project.config.laneTypes.map((lt) => (
-            <>
-              <span key={lt.id} className="text-xs text-gray-400">
+            <Fragment key={lt.id}>
+              <span className="text-xs text-gray-400">
                 {(project.config.totalLanes[lt.id] ?? 0).toLocaleString()} {lt.name}
               </span>
               <span className="text-xs text-gray-300">·</span>
-            </>
+            </Fragment>
           ))}
           <span className="text-xs text-gray-400">{project.config.durationMonths} months</span>
 
