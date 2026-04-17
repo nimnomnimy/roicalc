@@ -10,10 +10,10 @@ const PHASE_TYPES: Record<string, PhaseType> = {
   poc: 'poc', pilot: 'pilot', controlled: 'controlled', rollout: 'rollout',
 };
 const PHASE_COLORS: Record<PhaseType, string> = {
-  poc: '#6366f1', pilot: '#f59e0b', controlled: '#10b981', rollout: '#3b82f6',
+  poc: '#6366f1', pilot: '#f59e0b', controlled: '#10b981', rollout: '#3b82f6', custom: '#64748b',
 };
 const PHASE_NAMES: Record<PhaseType, string> = {
-  poc: 'Proof of Concept', pilot: 'Pilot', controlled: 'Controlled Deployment', rollout: 'Rollout',
+  poc: 'Proof of Concept', pilot: 'Pilot', controlled: 'Controlled Deployment', rollout: 'Rollout', custom: 'Phase',
 };
 
 export interface ImportResult {

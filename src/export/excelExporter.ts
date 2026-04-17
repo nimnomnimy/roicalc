@@ -37,7 +37,7 @@ export function exportToExcel(project: ROIProject, timeline: Timeline) {
     ['Phase', 'Type', 'Migration Events', ...laneTypes.map((lt) => `Total ${lt.name} Migrated`)],
     ...project.phases.map(p => [
       p.name,
-      p.type,
+      p.type ?? 'custom',
       p.monthDeltas.length,
       ...laneTypes.map((lt) =>
         p.monthDeltas.reduce((s, d) => s + (d.laneDeltas.find((x) => x.laneTypeId === lt.id)?.added ?? 0), 0)
@@ -160,7 +160,7 @@ export function exportToExcel(project: ROIProject, timeline: Timeline) {
       d.setMonth(d.getMonth() + delta.monthIndex);
       const label = d.toLocaleDateString('en-AU', { month: 'short', year: 'numeric' });
       phasesRows.push([
-        phase.name, phase.type, delta.monthIndex, label,
+        phase.name, phase.type ?? 'custom', delta.monthIndex, label,
         ...laneTypes.map((lt) => delta.laneDeltas.find((x) => x.laneTypeId === lt.id)?.added ?? 0),
       ]);
     }

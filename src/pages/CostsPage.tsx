@@ -45,7 +45,6 @@ const STORAGE_TOTAL_SCALE = 'roi-planner.costs.totalScale';
 type TotalScale = 'monthly' | 'quarterly' | 'annual';
 const SCALE_MONTHS: Record<TotalScale, number> = { monthly: 1, quarterly: 3, annual: 12 };
 const SCALE_LABEL: Record<TotalScale, string> = { monthly: 'Total / mo', quarterly: 'Total / qtr', annual: 'Total / yr' };
-const SCALE_SHORT: Record<TotalScale, string> = { monthly: 'mo', quarterly: 'qtr', annual: 'yr' };
 
 function loadJson<T>(key: string, fallback: T): T {
   try {
