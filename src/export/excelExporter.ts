@@ -100,14 +100,21 @@ export function exportToExcel(project: ROIProject, timeline: Timeline) {
   XLSX.utils.book_append_sheet(wb, wsMonthly, 'Monthly Breakdown');
 
   // ── Sheet 3: Cost Items ────────────────────────────────────────────────────
+  const baseCurrency = project.config.baseCurrency ?? 'AUD';
+  const globalNewDiscountPct = project.config.globalNewDiscountPct ?? 0;
   const costsHeaders = [
     'Platform', 'Vendor', 'Item', 'Cost Type', 'Lane Type',
-    'Unit Price', 'Billing', 'Discount %', 'One-off', 'One-off Month', 'Enabled',
+    'Unit Price', 'Currency', 'Billing', 'Discount %', 'Discount Source', 'One-off', 'One-off Month', 'Enabled',
   ];
   const costsRows = project.costItems.map(item => {
     const laneTypeName = item.laneTypeId
       ? (laneTypes.find((lt) => lt.id === item.laneTypeId)?.name ?? item.laneTypeId)
       : 'N/A';
+    const hasOverride = item.discountPct !== undefined;
+    const effectivePct = hasOverride
+      ? (item.discountPct ?? 0)
+      : (item.platform === 'new' ? globalNewDiscountPct : 0);
+    const discountSource = hasOverride ? 'item' : (item.platform === 'new' && globalNewDiscountPct > 0 ? 'global' : '');
     return [
       item.platform === 'existing' ? 'Existing' : 'New',
       item.vendor,
@@ -115,8 +122,10 @@ export function exportToExcel(project: ROIProject, timeline: Timeline) {
       item.costType,
       laneTypeName,
       item.unitPrice,
+      item.currency ?? baseCurrency,
       item.billing,
-      item.discountPct ?? 0,
+      effectivePct,
+      discountSource,
       item.oneOff ? 'Yes' : 'No',
       item.oneOff ? (item.oneOffMonth ?? 0) : '',
       item.enabled ? 'Yes' : 'No',
@@ -129,7 +138,7 @@ export function exportToExcel(project: ROIProject, timeline: Timeline) {
   }
   wsCosts['!cols'] = [
     { wch: 10 }, { wch: 16 }, { wch: 22 }, { wch: 10 }, { wch: 16 },
-    { wch: 12 }, { wch: 10 }, { wch: 10 }, { wch: 8 }, { wch: 12 }, { wch: 8 },
+    { wch: 12 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 14 }, { wch: 8 }, { wch: 12 }, { wch: 8 },
   ];
   XLSX.utils.book_append_sheet(wb, wsCosts, 'Cost Items');
 

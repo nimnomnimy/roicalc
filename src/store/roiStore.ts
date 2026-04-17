@@ -11,6 +11,9 @@ const DEFAULT_PROJECT: ROIProject = {
     durationMonths: 24,
     laneTypes: [],
     totalLanes: {},
+    globalNewDiscountPct: 0,
+    baseCurrency: 'AUD',
+    audPerUsd: 1.5,
   },
   costItems: [],
   phases: [
@@ -31,7 +34,12 @@ interface ROIStore {
   addCostItem: (item: Omit<CostItem, 'id'>) => void;
   updateCostItem: (id: string, updates: Partial<CostItem>) => void;
   deleteCostItem: (id: string) => void;
+  /** Reorder a cost item within its platform group by moving it to a new index among same-platform items. */
+  reorderCostItem: (id: string, targetIndexInGroup: number) => void;
+  addPhase: (name?: string, color?: string) => string;
   updatePhase: (id: string, updates: Partial<Omit<Phase, 'id' | 'monthDeltas'>>) => void;
+  deletePhase: (id: string) => void;
+  reorderPhase: (id: string, targetIndex: number) => void;
   addPhaseMonthDelta: (phaseId: string, delta: PhaseMonthDelta) => void;
   updatePhaseMonthDelta: (phaseId: string, monthIndex: number, updates: Partial<PhaseMonthDelta>) => void;
   deletePhaseMonthDelta: (phaseId: string, monthIndex: number) => void;
@@ -91,10 +99,64 @@ export const useROIStore = create<ROIStore>()(
       deleteCostItem: (id) =>
         set((s) => { s.project.costItems = s.project.costItems.filter((c: CostItem) => c.id !== id); }),
 
+      reorderCostItem: (id, targetIndexInGroup) =>
+        set((s) => {
+          const items = s.project.costItems;
+          const moving = items.find((c: CostItem) => c.id === id);
+          if (!moving) return;
+          const platform = moving.platform;
+          // Positions (in the full list) of items in the same platform group.
+          const groupPositions: number[] = [];
+          items.forEach((c: CostItem, i: number) => { if (c.platform === platform) groupPositions.push(i); });
+          const fromGroupIdx = groupPositions.findIndex((i) => items[i].id === id);
+          const clampedTarget = Math.max(0, Math.min(targetIndexInGroup, groupPositions.length - 1));
+          if (fromGroupIdx === clampedTarget) return;
+          // Remove item from global list, then re-insert at the position corresponding to target group index.
+          const fromFullIdx = groupPositions[fromGroupIdx];
+          const [item] = items.splice(fromFullIdx, 1);
+          // Recompute group positions after removal.
+          const newGroupPositions: number[] = [];
+          items.forEach((c: CostItem, i: number) => { if (c.platform === platform) newGroupPositions.push(i); });
+          const insertAt = clampedTarget >= newGroupPositions.length
+            ? (newGroupPositions.length === 0 ? items.length : newGroupPositions[newGroupPositions.length - 1] + 1)
+            : newGroupPositions[clampedTarget];
+          items.splice(insertAt, 0, item);
+        }),
+
+      addPhase: (name, color) => {
+        const id = nanoid();
+        const palette = ['#6366f1', '#f59e0b', '#10b981', '#3b82f6', '#ec4899', '#14b8a6', '#a855f7', '#f43f5e'];
+        set((s) => {
+          const chosenColor = color ?? palette[s.project.phases.length % palette.length];
+          s.project.phases.push({
+            id,
+            type: 'custom',
+            name: name?.trim() || `Phase ${s.project.phases.length + 1}`,
+            color: chosenColor,
+            monthDeltas: [],
+          });
+        });
+        return id;
+      },
+
       updatePhase: (id, updates) =>
         set((s) => {
           const phase = s.project.phases.find((p: Phase) => p.id === id);
           if (phase) Object.assign(phase, updates);
+        }),
+
+      deletePhase: (id) =>
+        set((s) => { s.project.phases = s.project.phases.filter((p: Phase) => p.id !== id); }),
+
+      reorderPhase: (id, targetIndex) =>
+        set((s) => {
+          const phases = s.project.phases;
+          const from = phases.findIndex((p: Phase) => p.id === id);
+          if (from === -1) return;
+          const to = Math.max(0, Math.min(targetIndex, phases.length - 1));
+          if (from === to) return;
+          const [phase] = phases.splice(from, 1);
+          phases.splice(to, 0, phase);
         }),
 
       addPhaseMonthDelta: (phaseId, delta) =>
@@ -118,8 +180,37 @@ export const useROIStore = create<ROIStore>()(
         set((s) => {
           const phase = s.project.phases.find((p: Phase) => p.id === phaseId);
           if (!phase) return;
-          const delta = phase.monthDeltas.find((d: PhaseMonthDelta) => d.monthIndex === monthIndex);
-          if (delta) Object.assign(delta, updates);
+          const idx = phase.monthDeltas.findIndex((d: PhaseMonthDelta) => d.monthIndex === monthIndex);
+          if (idx === -1) return;
+
+          // Moving to a different month: merge with an existing delta at that month if present,
+          // otherwise just change the index and re-sort so the list stays in chronological order.
+          if (updates.monthIndex !== undefined && updates.monthIndex !== monthIndex) {
+            const moving = phase.monthDeltas[idx];
+            const laneDeltas = updates.laneDeltas ?? moving.laneDeltas;
+            const collidingIdx = phase.monthDeltas.findIndex(
+              (d: PhaseMonthDelta) => d.monthIndex === updates.monthIndex,
+            );
+            phase.monthDeltas.splice(idx, 1);
+            if (collidingIdx !== -1) {
+              // splice shifted indices — recompute
+              const dstIdx = phase.monthDeltas.findIndex(
+                (d: PhaseMonthDelta) => d.monthIndex === updates.monthIndex,
+              );
+              const dst = phase.monthDeltas[dstIdx];
+              for (const ld of laneDeltas) {
+                const found = dst.laneDeltas.find((x) => x.laneTypeId === ld.laneTypeId);
+                if (found) found.added += ld.added;
+                else dst.laneDeltas.push({ ...ld });
+              }
+            } else {
+              phase.monthDeltas.push({ monthIndex: updates.monthIndex, laneDeltas });
+            }
+            phase.monthDeltas.sort((a: PhaseMonthDelta, b: PhaseMonthDelta) => a.monthIndex - b.monthIndex);
+            return;
+          }
+
+          Object.assign(phase.monthDeltas[idx], updates);
         }),
 
       deletePhaseMonthDelta: (phaseId, monthIndex) =>
@@ -160,6 +251,12 @@ export const useROIStore = create<ROIStore>()(
               }
             }
           }
+        }
+        // Fill in missing currency/discount fields on older persisted state
+        if (cfg) {
+          if (cfg.globalNewDiscountPct === undefined) cfg.globalNewDiscountPct = 0;
+          if (cfg.baseCurrency === undefined) cfg.baseCurrency = 'AUD';
+          if (cfg.audPerUsd === undefined) cfg.audPerUsd = 1.5;
         }
         return { ...current, ...(persisted as object) };
       },

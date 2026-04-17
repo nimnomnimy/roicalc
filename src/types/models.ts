@@ -1,5 +1,6 @@
 export type Platform = 'existing' | 'new';
 export type BillingCycle = 'monthly' | 'annual';
+export type Currency = 'AUD' | 'USD';
 
 export interface LaneTypeDef {
   id: string;
@@ -11,17 +12,29 @@ export interface CostItem {
   platform: Platform;
   vendor: string;
   name: string;
-  costType: 'per-lane' | 'flat';
+  /**
+   * - 'flat': a single monthly amount
+   * - 'per-lane': charged per lane of a specific lane type
+   * - 'per-lane-total': charged per lane across ALL lane types (sum of every lane)
+   */
+  costType: 'per-lane' | 'per-lane-total' | 'flat';
   laneTypeId?: string; // id of LaneTypeDef; only when costType === 'per-lane'
   unitPrice: number;
+  currency?: Currency; // defaults to project base currency when absent
   billing: BillingCycle;
   oneOff: boolean;
   oneOffMonth?: number;
+  /** Per-item discount override; when undefined, falls back to globalNewDiscountPct for 'new' platform items. */
   discountPct?: number;
   enabled: boolean;
 }
 
-export type PhaseType = 'poc' | 'pilot' | 'controlled' | 'rollout';
+/**
+ * Preset phase kinds kept around for backwards compatibility with existing projects
+ * and Excel imports. New phases can be created without a type — the name and colour
+ * are the source of truth for display.
+ */
+export type PhaseType = 'poc' | 'pilot' | 'controlled' | 'rollout' | 'custom';
 
 export interface PhaseMonthDelta {
   monthIndex: number;
@@ -30,7 +43,8 @@ export interface PhaseMonthDelta {
 
 export interface Phase {
   id: string;
-  type: PhaseType;
+  /** Optional preset kind (for imports / legacy projects). User-created phases default to 'custom'. */
+  type?: PhaseType;
   name: string;
   color: string;
   monthDeltas: PhaseMonthDelta[];
@@ -43,6 +57,12 @@ export interface ProjectConfig {
   laneTypes: LaneTypeDef[];
   /** Total lanes per lane type id at project start */
   totalLanes: Record<string, number>;
+  /** Default discount % applied to all 'new' platform items unless the item has its own discountPct. */
+  globalNewDiscountPct?: number;
+  /** Base currency for display and totals. Defaults to AUD. */
+  baseCurrency?: Currency;
+  /** AUD equivalent of 1 USD (e.g. 1.52). Used to convert USD-priced items to AUD. */
+  audPerUsd?: number;
 }
 
 export interface ROIProject {

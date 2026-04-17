@@ -9,6 +9,7 @@ import { exportToExcel } from './export/excelExporter';
 import { importFromExcel } from './export/excelImporter';
 import type { ROIProject } from './types/models';
 import { computeTimeline } from './engine/timelineEngine';
+import { setDisplayCurrency } from './utils/format';
 
 type Tab = 'chart' | 'table' | 'costs' | 'phases' | 'settings';
 
@@ -235,6 +236,10 @@ export default function App() {
   const [tab, setTab] = useState<Tab>('chart');
   const { project } = useROIStore();
   const timeline = useMemo(() => computeTimeline(project), [project]);
+
+  useEffect(() => {
+    setDisplayCurrency(project.config.baseCurrency ?? 'AUD');
+  }, [project.config.baseCurrency]);
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">

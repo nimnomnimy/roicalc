@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine,
 } from 'recharts';
@@ -7,12 +7,13 @@ import { computeTimeline, aggregateTimeline } from '../engine/timelineEngine';
 import type { PeriodView } from '../engine/timelineEngine';
 import { formatCurrency } from '../utils/format';
 
-type LineKey = 'existingCost' | 'newCost' | 'baselineCost' | 'savings' | 'cumulativeSavings';
+type LineKey = 'existingCost' | 'newCost' | 'combinedCost' | 'baselineCost' | 'savings' | 'cumulativeSavings';
 
 const LINE_CONFIG: { key: LineKey; label: string; color: string; dashed?: boolean }[] = [
   { key: 'baselineCost', label: 'Baseline (no change)', color: '#9ca3af', dashed: true },
   { key: 'existingCost', label: 'Existing Platform', color: '#ef4444' },
   { key: 'newCost', label: 'New Platform', color: '#3b82f6' },
+  { key: 'combinedCost', label: 'Combined (Old + New)', color: '#a855f7' },
   { key: 'savings', label: 'Savings vs Baseline', color: '#10b981', dashed: true },
   { key: 'cumulativeSavings', label: 'Cumulative Savings', color: '#6366f1' },
 ];
@@ -48,15 +49,56 @@ function CustomTooltip({ active, payload, label }: {
 }
 
 export function ChartPage() {
-  const { project } = useROIStore();
+  const { project, updateConfig } = useROIStore();
   const [period, setPeriod] = useState<PeriodView>('monthly');
   const [visibleLines, setVisibleLines] = useState<Set<LineKey>>(
-    new Set(['baselineCost', 'existingCost', 'newCost', 'savings', 'cumulativeSavings'])
+    new Set(['baselineCost', 'existingCost', 'newCost', 'combinedCost', 'savings'])
   );
   const [showMilestones, setShowMilestones] = useState(true);
 
-  const timeline = useMemo(() => computeTimeline(project), [project]);
+  // Existing-platform vendor filter for baseline/existing lines.
+  // `null` means "include all vendors" (default).
+  const existingVendors = useMemo(() => {
+    const set = new Set<string>();
+    for (const c of project.costItems) {
+      if (c.platform === 'existing' && c.vendor.trim()) set.add(c.vendor);
+    }
+    return Array.from(set).sort();
+  }, [project.costItems]);
+
+  const [selectedVendors, setSelectedVendors] = useState<Set<string> | null>(null);
+  // Drop vendors that no longer exist from the selection.
+  useEffect(() => {
+    if (!selectedVendors) return;
+    const valid = new Set(existingVendors);
+    let changed = false;
+    const next = new Set<string>();
+    for (const v of selectedVendors) {
+      if (valid.has(v)) next.add(v); else changed = true;
+    }
+    if (changed) setSelectedVendors(next.size === valid.size ? null : next);
+  }, [existingVendors, selectedVendors]);
+
+  const vendorFilter = selectedVendors ?? undefined;
+  const timeline = useMemo(
+    () => computeTimeline(project, { existingVendorFilter: vendorFilter }),
+    [project, vendorFilter]
+  );
   const chartData = useMemo(() => aggregateTimeline(timeline.rows, period), [timeline, period]);
+
+  const toggleVendor = (vendor: string) => {
+    setSelectedVendors((prev) => {
+      const current = prev ?? new Set(existingVendors);
+      const next = new Set(current);
+      if (next.has(vendor)) next.delete(vendor);
+      else next.add(vendor);
+      // If user reselected every vendor, collapse back to "all" (null) so future vendors auto-include.
+      if (next.size === existingVendors.length) return null;
+      return next;
+    });
+  };
+  const selectAllVendors = () => setSelectedVendors(null);
+  const clearVendors = () => setSelectedVendors(new Set());
 
   const toggleLine = (key: LineKey) => {
     setVisibleLines((prev) => {
@@ -82,8 +124,56 @@ export function ChartPage() {
 
   const hasSavings = timeline.totalSavings > 0;
 
+  const durationMonths = project.config.durationMonths;
+  const setDuration = (m: number) => updateConfig({ durationMonths: Math.max(1, Math.min(600, Math.round(m))) });
+
   return (
     <div className="p-6 space-y-6 max-w-6xl mx-auto">
+      {/* Project span control */}
+      <div className="flex items-center gap-3 flex-wrap">
+        <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">Project span</span>
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={() => setDuration(durationMonths - 12)}
+            className="w-7 h-7 text-gray-500 hover:text-gray-800 border border-gray-200 rounded hover:bg-gray-50"
+            title="−12 months"
+          >
+            −
+          </button>
+          <input
+            type="number"
+            className="w-16 border border-gray-300 rounded px-2 py-1 text-sm text-right"
+            value={durationMonths}
+            onChange={(e) => setDuration(parseInt(e.target.value) || 0)}
+            min={1}
+            max={600}
+          />
+          <span className="text-sm text-gray-500">months ({(durationMonths / 12).toFixed(1)} yrs)</span>
+          <button
+            onClick={() => setDuration(durationMonths + 12)}
+            className="w-7 h-7 text-gray-500 hover:text-gray-800 border border-gray-200 rounded hover:bg-gray-50"
+            title="+12 months"
+          >
+            +
+          </button>
+        </div>
+        <div className="flex gap-1">
+          {[12, 24, 36, 60].map((m) => (
+            <button
+              key={m}
+              onClick={() => setDuration(m)}
+              className={`px-2 py-1 text-xs rounded border transition-colors ${
+                durationMonths === m
+                  ? 'bg-indigo-600 text-white border-indigo-600'
+                  : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
+              }`}
+            >
+              {m === 12 ? '1y' : m === 24 ? '2y' : m === 36 ? '3y' : '5y'}
+            </button>
+          ))}
+        </div>
+      </div>
+
       {/* Summary cards */}
       <div className="grid grid-cols-4 gap-4">
         <div className="bg-gray-50 border border-gray-200 rounded-xl p-4">
@@ -138,6 +228,14 @@ export function ChartPage() {
         </div>
 
         <div className="flex items-center gap-3">
+          <VendorFilter
+            vendors={existingVendors}
+            selected={selectedVendors}
+            onToggle={toggleVendor}
+            onSelectAll={selectAllVendors}
+            onClear={clearVendors}
+          />
+
           <button
             onClick={() => setShowMilestones((v) => !v)}
             className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-sm border transition-all ${
@@ -248,6 +346,89 @@ export function ChartPage() {
           </ResponsiveContainer>
         )}
       </div>
+    </div>
+  );
+}
+
+interface VendorFilterProps {
+  vendors: string[];
+  /** `null` means all selected (default). */
+  selected: Set<string> | null;
+  onToggle: (vendor: string) => void;
+  onSelectAll: () => void;
+  onClear: () => void;
+}
+
+function VendorFilter({ vendors, selected, onToggle, onSelectAll, onClear }: VendorFilterProps) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function onClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener('mousedown', onClick);
+    return () => document.removeEventListener('mousedown', onClick);
+  }, []);
+
+  const all = selected === null;
+  const activeCount = all ? vendors.length : selected.size;
+  const label = all
+    ? `All vendors (${vendors.length})`
+    : activeCount === 0
+      ? 'No vendors'
+      : activeCount === 1
+        ? Array.from(selected).join(', ')
+        : `${activeCount} of ${vendors.length} vendors`;
+
+  const disabled = vendors.length === 0;
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        onClick={() => !disabled && setOpen((v) => !v)}
+        disabled={disabled}
+        className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-sm border transition-all ${
+          all
+            ? 'bg-white border-gray-200 text-gray-500'
+            : 'bg-red-50 border-red-200 text-red-700'
+        } disabled:opacity-50 disabled:cursor-not-allowed`}
+        title="Filter baseline + existing costs by vendor"
+      >
+        <svg className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 20 20" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M3 4h14M6 10h8M9 16h2" />
+        </svg>
+        {label}
+      </button>
+      {open && (
+        <div className="absolute right-0 top-10 z-20 bg-white border border-gray-200 rounded-xl shadow-lg w-64 py-1 text-sm">
+          <div className="flex items-center justify-between px-3 py-1.5">
+            <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Existing vendors</span>
+            <div className="flex gap-2 text-xs">
+              <button onClick={onSelectAll} className="text-indigo-600 hover:underline">All</button>
+              <button onClick={onClear} className="text-gray-500 hover:underline">None</button>
+            </div>
+          </div>
+          <div className="max-h-64 overflow-y-auto">
+            {vendors.map((v) => {
+              const isSelected = all || (selected?.has(v) ?? false);
+              return (
+                <label key={v} className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-50 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={isSelected}
+                    onChange={() => onToggle(v)}
+                  />
+                  <span className="text-gray-700 truncate">{v}</span>
+                </label>
+              );
+            })}
+          </div>
+          <div className="border-t border-gray-100 mt-1 px-3 py-1.5 text-xs text-gray-400">
+            Filters baseline &amp; existing-platform lines only.
+          </div>
+        </div>
+      )}
     </div>
   );
 }

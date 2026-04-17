@@ -41,9 +41,9 @@ function BreakdownPanel({
                 <th className="text-left px-4 py-2 font-medium text-gray-500 text-xs">Vendor</th>
                 <th className="text-left px-4 py-2 font-medium text-gray-500 text-xs">Item</th>
                 <th className="text-right px-4 py-2 font-medium text-gray-500 text-xs">Lanes</th>
-                <th className="text-right px-4 py-2 font-medium text-gray-500 text-xs">Unit Price</th>
+                <th className="text-right px-4 py-2 font-medium text-gray-500 text-xs">Unit Price<br/><span className="text-gray-400 font-normal">mo / yr</span></th>
                 <th className="text-right px-4 py-2 font-medium text-gray-500 text-xs">Discount</th>
-                <th className="text-right px-4 py-2 font-medium text-gray-500 text-xs">Amount</th>
+                <th className="text-right px-4 py-2 font-medium text-gray-500 text-xs">Amount<br/><span className="text-gray-400 font-normal">mo / yr</span></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-50 bg-white">
@@ -59,16 +59,24 @@ function BreakdownPanel({
                   <td className="px-4 py-2 text-right text-gray-500">
                     {item.lanes != null ? item.lanes.toLocaleString() : '—'}
                   </td>
-                  <td className="px-4 py-2 text-right text-gray-500">
-                    {item.unitPrice != null ? formatCurrency(item.unitPrice) : '—'}
+                  <td className="px-4 py-2 text-right">
+                    {item.unitPrice != null ? (
+                      <div className="leading-tight">
+                        <div className="text-gray-600">{formatCurrency(item.unitPrice)}</div>
+                        <div className="text-xs text-gray-400">{formatCurrency(item.unitPrice * 12)}/yr</div>
+                      </div>
+                    ) : '—'}
                   </td>
                   <td className="px-4 py-2 text-right">
                     {item.discountPct ? (
                       <span className="text-green-600 font-medium">{item.discountPct}%</span>
                     ) : '—'}
                   </td>
-                  <td className={`px-4 py-2 text-right font-medium text-${color}-600`}>
-                    {formatCurrency(item.amount)}
+                  <td className={`px-4 py-2 text-right text-${color}-600`}>
+                    <div className="leading-tight">
+                      <div className="font-medium">{formatCurrency(item.amount)}</div>
+                      <div className={`text-xs text-${color}-400`}>{formatCurrency(item.amount * 12)}/yr</div>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -76,7 +84,12 @@ function BreakdownPanel({
             <tfoot>
               <tr className={`border-t border-${color}-100 bg-${color}-50`}>
                 <td colSpan={5} className="px-4 py-2 text-sm font-semibold text-gray-700">Total</td>
-                <td className={`px-4 py-2 text-right text-sm font-bold text-${color}-700`}>{formatCurrency(total)}</td>
+                <td className={`px-4 py-2 text-right text-${color}-700`}>
+                  <div className="leading-tight">
+                    <div className="font-bold">{formatCurrency(total)}</div>
+                    <div className={`text-xs text-${color}-500 font-normal`}>{formatCurrency(total * 12)}/yr</div>
+                  </div>
+                </td>
               </tr>
             </tfoot>
           </table>

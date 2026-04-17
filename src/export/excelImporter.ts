@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx';
-import type { ROIProject, CostItem, Phase, PhaseType, Platform, BillingCycle, LaneTypeDef } from '../types/models';
+import type { ROIProject, CostItem, Phase, PhaseType, Platform, BillingCycle, LaneTypeDef, Currency } from '../types/models';
 import { nanoid } from '../utils/nanoid';
 
 function str(v: unknown): string { return v == null ? '' : String(v).trim(); }
@@ -41,6 +41,9 @@ export function importFromExcel(file: File): Promise<ImportResult> {
           durationMonths: num(summary[4]?.[1]) || 24,
           laneTypes: [] as LaneTypeDef[],
           totalLanes: {} as Record<string, number>,
+          globalNewDiscountPct: 0,
+          baseCurrency: 'AUD' as Currency,
+          audPerUsd: 1.5,
         };
         if (typeof summary[3]?.[1] === 'number') {
           const d = XLSX.SSF.parse_date_code(summary[3][1] as number);
@@ -74,12 +77,19 @@ export function importFromExcel(file: File): Promise<ImportResult> {
         const costItems: CostItem[] = costsRaw.map((row, i) => {
           const platformStr = str(row['Platform']).toLowerCase();
           const platform: Platform = platformStr === 'new' ? 'new' : 'existing';
-          const costType = str(row['Cost Type']) === 'per-lane' ? 'per-lane' : 'flat';
+          const costTypeRaw = str(row['Cost Type']);
+          const costType: CostItem['costType'] =
+            costTypeRaw === 'per-lane' ? 'per-lane'
+            : costTypeRaw === 'per-lane-total' ? 'per-lane-total'
+            : 'flat';
           const billing: BillingCycle = str(row['Billing']) === 'annual' ? 'annual' : 'monthly';
           const discountPct = Math.min(100, Math.max(0, num(row['Discount %'] ?? 0)));
+          const discountSource = str(row['Discount Source']).toLowerCase();
           const oneOff = bool(row['One-off']);
           const laneTypeName = str(row['Lane Type']).toLowerCase();
           const laneTypeId = laneNameToId.get(laneTypeName);
+          const currencyStr = str(row['Currency']).toUpperCase();
+          const currency: Currency | undefined = currencyStr === 'USD' ? 'USD' : currencyStr === 'AUD' ? 'AUD' : undefined;
 
           if (!str(row['Vendor']) || !str(row['Item'])) {
             warnings.push(`Cost Items row ${i + 2}: missing Vendor or Item — skipped`);
@@ -90,6 +100,9 @@ export function importFromExcel(file: File): Promise<ImportResult> {
             warnings.push(`Cost Items row ${i + 2}: lane type "${laneTypeName}" not found in Lane Types sheet`);
           }
 
+          // When 'Discount Source' is 'global', don't persist the per-item value — let global apply.
+          const keepItemDiscount = discountSource !== 'global' && discountPct > 0;
+
           return {
             id: nanoid(),
             platform,
@@ -98,8 +111,9 @@ export function importFromExcel(file: File): Promise<ImportResult> {
             costType,
             laneTypeId: costType === 'per-lane' ? laneTypeId : undefined,
             unitPrice: num(row['Unit Price']),
+            currency,
             billing,
-            discountPct: discountPct > 0 ? discountPct : undefined,
+            discountPct: keepItemDiscount ? discountPct : undefined,
             oneOff,
             oneOffMonth: oneOff ? num(row['One-off Month']) : undefined,
             enabled: str(row['Enabled']).toLowerCase() !== 'no',
@@ -111,27 +125,33 @@ export function importFromExcel(file: File): Promise<ImportResult> {
         if (!wsPhases) throw new Error('Missing "Phases" sheet');
         const phasesRaw = XLSX.utils.sheet_to_json<Record<string, unknown>>(wsPhases);
 
-        const phaseMap = new Map<PhaseType, Phase>();
-        const phaseOrder: PhaseType[] = [];
+        // Phases are keyed by their display name so custom phases (and multiple phases
+        // sharing a preset type) round-trip correctly. Preserve the order rows appear in.
+        const phaseByName = new Map<string, Phase>();
+        const phaseOrder: string[] = [];
+
+        const palette = ['#6366f1', '#f59e0b', '#10b981', '#3b82f6', '#ec4899', '#14b8a6', '#a855f7', '#f43f5e'];
 
         for (const row of phasesRaw) {
           const typeStr = str(row['Type']).toLowerCase() as PhaseType;
-          const phaseType = PHASE_TYPES[typeStr];
-          if (!phaseType) {
-            warnings.push(`Phases: unknown type "${typeStr}" — skipped`);
+          const presetType = PHASE_TYPES[typeStr];
+          const name = str(row['Phase']) || (presetType ? PHASE_NAMES[presetType] : '');
+          if (!name) {
+            warnings.push(`Phases: row with no Phase name — skipped`);
             continue;
           }
-          if (!phaseMap.has(phaseType)) {
-            phaseOrder.push(phaseType);
-            phaseMap.set(phaseType, {
+          if (!phaseByName.has(name)) {
+            const color = presetType ? PHASE_COLORS[presetType] : palette[phaseOrder.length % palette.length];
+            phaseByName.set(name, {
               id: nanoid(),
-              type: phaseType,
-              name: str(row['Phase']) || PHASE_NAMES[phaseType],
-              color: PHASE_COLORS[phaseType],
+              type: presetType ?? 'custom',
+              name,
+              color,
               monthDeltas: [],
             });
+            phaseOrder.push(name);
           }
-          const phase = phaseMap.get(phaseType)!;
+          const phase = phaseByName.get(name)!;
           const monthIndex = num(row['Month Index']);
 
           // Build laneDeltas from dynamic lane type columns
@@ -156,14 +176,7 @@ export function importFromExcel(file: File): Promise<ImportResult> {
           }
         }
 
-        const allTypes: PhaseType[] = ['poc', 'pilot', 'controlled', 'rollout'];
-        for (const t of allTypes) {
-          if (!phaseMap.has(t)) {
-            phaseMap.set(t, { id: nanoid(), type: t, name: PHASE_NAMES[t], color: PHASE_COLORS[t], monthDeltas: [] });
-            phaseOrder.push(t);
-          }
-        }
-        const phases = allTypes.map(t => phaseMap.get(t)!);
+        const phases = phaseOrder.map(n => phaseByName.get(n)!);
         for (const phase of phases) {
           phase.monthDeltas.sort((a, b) => a.monthIndex - b.monthIndex);
         }
