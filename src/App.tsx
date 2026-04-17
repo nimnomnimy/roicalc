@@ -204,10 +204,14 @@ export default function App() {
         </nav>
 
         <div className="ml-auto flex items-center gap-3">
-          <span className="text-xs text-gray-400">{project.config.totalPosLanes.toLocaleString()} POS lanes</span>
-          <span className="text-xs text-gray-300">·</span>
-          <span className="text-xs text-gray-400">{project.config.totalScoLanes.toLocaleString()} SCO lanes</span>
-          <span className="text-xs text-gray-300">·</span>
+          {project.config.laneTypes.map((lt) => (
+            <>
+              <span key={lt.id} className="text-xs text-gray-400">
+                {(project.config.totalLanes[lt.id] ?? 0).toLocaleString()} {lt.name}
+              </span>
+              <span className="text-xs text-gray-300">·</span>
+            </>
+          ))}
           <span className="text-xs text-gray-400">{project.config.durationMonths} months</span>
 
           <ImportExcelButton />

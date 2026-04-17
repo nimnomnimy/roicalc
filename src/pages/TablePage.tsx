@@ -19,10 +19,11 @@ function BreakdownPanel({
   const items: CostLineItem[] = platform === 'existing' ? row.existingBreakdown : row.newBreakdown;
   const total = platform === 'existing' ? row.existingCost : row.newCost;
   const color = platform === 'existing' ? 'red' : 'blue';
+  const laneColCount = 6;
 
   return (
     <tr>
-      <td colSpan={9} className="px-0 py-0">
+      <td colSpan={6} className="px-0 py-0">
         <div className={`mx-4 mb-3 border rounded-xl overflow-hidden border-${color}-100`}>
           <div className={`flex items-center justify-between px-4 py-2 bg-${color}-50 border-b border-${color}-100`}>
             <div className="text-sm font-semibold text-gray-800">
@@ -48,7 +49,7 @@ function BreakdownPanel({
             <tbody className="divide-y divide-gray-50 bg-white">
               {items.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="px-4 py-3 text-gray-400 text-xs italic text-center">No costs this month</td>
+                  <td colSpan={laneColCount} className="px-4 py-3 text-gray-400 text-xs italic text-center">No costs this month</td>
                 </tr>
               )}
               {items.map((item) => (
@@ -89,6 +90,7 @@ export function TablePage() {
   const { project } = useROIStore();
   const timeline = useMemo(() => computeTimeline(project), [project]);
   const [drill, setDrill] = useState<DrillTarget | null>(null);
+  const laneTypes = project.config.laneTypes;
 
   function toggleDrill(monthIndex: number, platform: DrillPlatform) {
     if (drill?.monthIndex === monthIndex && drill.platform === platform) {
@@ -97,6 +99,9 @@ export function TablePage() {
       setDrill({ monthIndex, platform });
     }
   }
+
+  // colSpan for totals row: Month + lane columns (2 per type) + cost columns
+  const laneColSpan = laneTypes.length * 2;
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
@@ -110,10 +115,16 @@ export function TablePage() {
           <thead>
             <tr className="bg-gray-50 border-b border-gray-200">
               <th className="text-left px-4 py-3 font-medium text-gray-600 whitespace-nowrap">Month</th>
-              <th className="text-right px-4 py-3 font-medium text-gray-500 text-xs whitespace-nowrap">Exist. POS</th>
-              <th className="text-right px-4 py-3 font-medium text-gray-500 text-xs whitespace-nowrap">Exist. SCO</th>
-              <th className="text-right px-4 py-3 font-medium text-gray-500 text-xs whitespace-nowrap">New POS</th>
-              <th className="text-right px-4 py-3 font-medium text-gray-500 text-xs whitespace-nowrap">New SCO</th>
+              {laneTypes.map((lt) => (
+                <>
+                  <th key={`exist-${lt.id}`} className="text-right px-4 py-3 font-medium text-gray-500 text-xs whitespace-nowrap">
+                    Exist. {lt.name}
+                  </th>
+                  <th key={`new-${lt.id}`} className="text-right px-4 py-3 font-medium text-gray-500 text-xs whitespace-nowrap">
+                    New {lt.name}
+                  </th>
+                </>
+              ))}
               <th className="text-right px-4 py-3 font-medium text-red-500 whitespace-nowrap">
                 Existing Cost <span className="text-gray-400 font-normal text-xs">↗ click</span>
               </th>
@@ -133,12 +144,17 @@ export function TablePage() {
                   className={`hover:bg-gray-50 ${drill?.monthIndex === row.monthIndex ? 'bg-gray-50' : ''}`}
                 >
                   <td className="px-4 py-2.5 font-medium text-gray-800 whitespace-nowrap">{row.label}</td>
-                  <td className="px-4 py-2.5 text-right text-gray-500 text-xs">{row.existingPosLanes.toLocaleString()}</td>
-                  <td className="px-4 py-2.5 text-right text-gray-500 text-xs">{row.existingScoLanes.toLocaleString()}</td>
-                  <td className="px-4 py-2.5 text-right text-gray-500 text-xs">{row.newPosLanes.toLocaleString()}</td>
-                  <td className="px-4 py-2.5 text-right text-gray-500 text-xs">{row.newScoLanes.toLocaleString()}</td>
+                  {laneTypes.map((lt) => (
+                    <>
+                      <td key={`exist-${lt.id}`} className="px-4 py-2.5 text-right text-gray-500 text-xs">
+                        {(row.existingLanes[lt.id] ?? 0).toLocaleString()}
+                      </td>
+                      <td key={`new-${lt.id}`} className="px-4 py-2.5 text-right text-gray-500 text-xs">
+                        {(row.newLanes[lt.id] ?? 0).toLocaleString()}
+                      </td>
+                    </>
+                  ))}
 
-                  {/* Existing cost — clickable */}
                   <td
                     className={`px-4 py-2.5 text-right cursor-pointer rounded transition-colors
                       ${drill?.monthIndex === row.monthIndex && drill.platform === 'existing'
@@ -150,7 +166,6 @@ export function TablePage() {
                     {formatCurrency(row.existingCost)}
                   </td>
 
-                  {/* New cost — clickable */}
                   <td
                     className={`px-4 py-2.5 text-right cursor-pointer rounded transition-colors
                       ${drill?.monthIndex === row.monthIndex && drill.platform === 'new'
@@ -173,7 +188,6 @@ export function TablePage() {
                   </td>
                 </tr>
 
-                {/* Breakdown panel — inserted right below the clicked row */}
                 {drill?.monthIndex === row.monthIndex && (
                   <BreakdownPanel
                     row={row}
@@ -187,7 +201,7 @@ export function TablePage() {
           <tfoot>
             <tr className="bg-gray-50 border-t-2 border-gray-200 font-semibold">
               <td className="px-4 py-3 text-gray-800">Total</td>
-              <td colSpan={4} />
+              {laneColSpan > 0 && <td colSpan={laneColSpan} />}
               <td className="px-4 py-3 text-right text-red-700">{formatCurrency(timeline.totalExisting)}</td>
               <td className="px-4 py-3 text-right text-blue-700">{formatCurrency(timeline.totalNew)}</td>
               <td className="px-4 py-3 text-right text-gray-400 text-sm">{formatCurrency(timeline.totalBaseline)}</td>

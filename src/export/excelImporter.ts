@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx';
-import type { ROIProject, CostItem, Phase, PhaseType, Platform, LaneType, BillingCycle } from '../types/models';
+import type { ROIProject, CostItem, Phase, PhaseType, Platform, BillingCycle, LaneTypeDef } from '../types/models';
 import { nanoid } from '../utils/nanoid';
 
 function str(v: unknown): string { return v == null ? '' : String(v).trim(); }
@@ -35,40 +35,59 @@ export function importFromExcel(file: File): Promise<ImportResult> {
         if (!wsSummary) throw new Error('Missing "Summary" sheet');
         const summary = XLSX.utils.sheet_to_json<string[]>(wsSummary, { header: 1 }) as unknown[][];
 
-        // Row indices are 0-based; sheet rows are:
-        // 0: title, 1: blank, 2: Project, 3: Start Date, 4: Duration, 5: POS Lanes, 6: SCO Lanes
         const config = {
           name: str(summary[2]?.[1]) || 'Imported Project',
-          startDate: str(summary[3]?.[1]) || '2026-06-01',
+          startDate: str(summary[3]?.[1]) || '2026-01-01',
           durationMonths: num(summary[4]?.[1]) || 24,
-          totalPosLanes: num(summary[5]?.[1]) || 0,
-          totalScoLanes: num(summary[6]?.[1]) || 0,
+          laneTypes: [] as LaneTypeDef[],
+          totalLanes: {} as Record<string, number>,
         };
-        // Normalise date — Excel may give us a serial number or a string
         if (typeof summary[3]?.[1] === 'number') {
           const d = XLSX.SSF.parse_date_code(summary[3][1] as number);
           config.startDate = `${d.y}-${String(d.m).padStart(2, '0')}-${String(d.d).padStart(2, '0')}`;
         }
 
+        // ── Lane Types sheet ───────────────────────────────────────────────
+        const wsLaneTypes = wb.Sheets['Lane Types'];
+        if (wsLaneTypes) {
+          const laneTypesRaw = XLSX.utils.sheet_to_json<Record<string, unknown>>(wsLaneTypes);
+          for (const row of laneTypesRaw) {
+            const name = str(row['Name']);
+            const existingId = str(row['ID']);
+            if (!name) continue;
+            const id = existingId || nanoid();
+            config.laneTypes.push({ id, name });
+            config.totalLanes[id] = num(row['Total Lanes']);
+          }
+        } else {
+          warnings.push('No "Lane Types" sheet found — lane types will be empty');
+        }
+
+        // Build a lookup: lane type name → id (for matching cost items)
+        const laneNameToId = new Map<string, string>(config.laneTypes.map((lt) => [lt.name.toLowerCase(), lt.id]));
+
         // ── Cost Items sheet ───────────────────────────────────────────────
         const wsCosts = wb.Sheets['Cost Items'];
         if (!wsCosts) throw new Error('Missing "Cost Items" sheet');
         const costsRaw = XLSX.utils.sheet_to_json<Record<string, unknown>>(wsCosts);
-        // Headers: Platform, Vendor, Item, Cost Type, Lane Type, Unit Price, Billing, One-off, One-off Month, Enabled
 
         const costItems: CostItem[] = costsRaw.map((row, i) => {
           const platformStr = str(row['Platform']).toLowerCase();
           const platform: Platform = platformStr === 'new' ? 'new' : 'existing';
           const costType = str(row['Cost Type']) === 'per-lane' ? 'per-lane' : 'flat';
-          const laneTypeRaw = str(row['Lane Type']);
-          const laneType: LaneType = laneTypeRaw === 'SCO' ? 'SCO' : laneTypeRaw === 'both' ? 'both' : 'POS';
           const billing: BillingCycle = str(row['Billing']) === 'annual' ? 'annual' : 'monthly';
           const discountPct = Math.min(100, Math.max(0, num(row['Discount %'] ?? 0)));
           const oneOff = bool(row['One-off']);
+          const laneTypeName = str(row['Lane Type']).toLowerCase();
+          const laneTypeId = laneNameToId.get(laneTypeName);
 
           if (!str(row['Vendor']) || !str(row['Item'])) {
             warnings.push(`Cost Items row ${i + 2}: missing Vendor or Item — skipped`);
             return null;
+          }
+
+          if (costType === 'per-lane' && laneTypeName && laneTypeName !== 'n/a' && !laneTypeId) {
+            warnings.push(`Cost Items row ${i + 2}: lane type "${laneTypeName}" not found in Lane Types sheet`);
           }
 
           return {
@@ -77,7 +96,7 @@ export function importFromExcel(file: File): Promise<ImportResult> {
             vendor: str(row['Vendor']),
             name: str(row['Item']),
             costType,
-            laneType: costType === 'per-lane' ? laneType : undefined,
+            laneTypeId: costType === 'per-lane' ? laneTypeId : undefined,
             unitPrice: num(row['Unit Price']),
             billing,
             discountPct: discountPct > 0 ? discountPct : undefined,
@@ -91,9 +110,7 @@ export function importFromExcel(file: File): Promise<ImportResult> {
         const wsPhases = wb.Sheets['Phases'];
         if (!wsPhases) throw new Error('Missing "Phases" sheet');
         const phasesRaw = XLSX.utils.sheet_to_json<Record<string, unknown>>(wsPhases);
-        // Headers: Phase, Type, Month Index, Month Label, POS Lanes Added, SCO Lanes Added
 
-        // Group rows by phase type, preserving order of first appearance
         const phaseMap = new Map<PhaseType, Phase>();
         const phaseOrder: PhaseType[] = [];
 
@@ -116,21 +133,29 @@ export function importFromExcel(file: File): Promise<ImportResult> {
           }
           const phase = phaseMap.get(phaseType)!;
           const monthIndex = num(row['Month Index']);
-          const posLanesAdded = num(row['POS Lanes Added']);
-          const scoLanesAdded = num(row['SCO Lanes Added']);
-          if (posLanesAdded > 0 || scoLanesAdded > 0) {
-            // Merge if same monthIndex already exists
+
+          // Build laneDeltas from dynamic lane type columns
+          const laneDeltas: { laneTypeId: string; added: number }[] = [];
+          for (const lt of config.laneTypes) {
+            const colName = `${lt.name} Added`;
+            const added = num(row[colName] ?? 0);
+            if (added > 0) laneDeltas.push({ laneTypeId: lt.id, added });
+          }
+
+          if (laneDeltas.length > 0) {
             const existing = phase.monthDeltas.find(d => d.monthIndex === monthIndex);
             if (existing) {
-              existing.posLanesAdded += posLanesAdded;
-              existing.scoLanesAdded += scoLanesAdded;
+              for (const ld of laneDeltas) {
+                const found = existing.laneDeltas.find((x) => x.laneTypeId === ld.laneTypeId);
+                if (found) found.added += ld.added;
+                else existing.laneDeltas.push({ ...ld });
+              }
             } else {
-              phase.monthDeltas.push({ monthIndex, posLanesAdded, scoLanesAdded });
+              phase.monthDeltas.push({ monthIndex, laneDeltas });
             }
           }
         }
 
-        // Ensure all 4 phase types exist (add empties for any missing)
         const allTypes: PhaseType[] = ['poc', 'pilot', 'controlled', 'rollout'];
         for (const t of allTypes) {
           if (!phaseMap.has(t)) {
@@ -138,9 +163,7 @@ export function importFromExcel(file: File): Promise<ImportResult> {
             phaseOrder.push(t);
           }
         }
-        // Sort by canonical order
         const phases = allTypes.map(t => phaseMap.get(t)!);
-        // Sort monthDeltas within each phase
         for (const phase of phases) {
           phase.monthDeltas.sort((a, b) => a.monthIndex - b.monthIndex);
         }

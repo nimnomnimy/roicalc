@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import type { CostItem, Platform, LaneType, BillingCycle } from '../types/models';
+import type { CostItem, Platform, BillingCycle } from '../types/models';
+import { useROIStore } from '../store/roiStore';
 import { formatCurrency } from '../utils/format';
 
 interface Props {
@@ -14,7 +15,7 @@ const EMPTY: Omit<CostItem, 'id'> = {
   vendor: '',
   name: '',
   costType: 'flat',
-  laneType: 'POS',
+  laneTypeId: undefined,
   unitPrice: 0,
   billing: 'monthly',
   oneOff: false,
@@ -24,8 +25,10 @@ const EMPTY: Omit<CostItem, 'id'> = {
 };
 
 export function CostItemForm({ platform, onSave, onCancel, initial }: Props) {
+  const { project } = useROIStore();
+  const laneTypes = project.config.laneTypes;
   const [form, setForm] = useState<Omit<CostItem, 'id'>>(
-    initial ? { ...initial } : { ...EMPTY, platform }
+    initial ? { ...initial } : { ...EMPTY, platform, laneTypeId: laneTypes[0]?.id }
   );
 
   const set = (updates: Partial<typeof form>) => setForm((f) => ({ ...f, ...updates }));
@@ -39,7 +42,7 @@ export function CostItemForm({ platform, onSave, onCancel, initial }: Props) {
             className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"
             value={form.vendor}
             onChange={(e) => set({ vendor: e.target.value })}
-            placeholder="e.g. NCR"
+            placeholder="Vendor name"
           />
         </div>
         <div>
@@ -48,7 +51,7 @@ export function CostItemForm({ platform, onSave, onCancel, initial }: Props) {
             className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"
             value={form.name}
             onChange={(e) => set({ name: e.target.value })}
-            placeholder="e.g. POS Lanes"
+            placeholder="Cost item description"
           />
         </div>
       </div>
@@ -69,15 +72,20 @@ export function CostItemForm({ platform, onSave, onCancel, initial }: Props) {
         {form.costType === 'per-lane' && (
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">Lane Type</label>
-            <select
-              className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"
-              value={form.laneType}
-              onChange={(e) => set({ laneType: e.target.value as LaneType })}
-            >
-              <option value="POS">POS</option>
-              <option value="SCO">SCO</option>
-              <option value="both">POS + SCO</option>
-            </select>
+            {laneTypes.length === 0 ? (
+              <p className="text-xs text-amber-600 mt-1">Add lane types in Settings first.</p>
+            ) : (
+              <select
+                className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"
+                value={form.laneTypeId ?? ''}
+                onChange={(e) => set({ laneTypeId: e.target.value || undefined })}
+              >
+                <option value="">— select —</option>
+                {laneTypes.map((lt) => (
+                  <option key={lt.id} value={lt.id}>{lt.name}</option>
+                ))}
+              </select>
+            )}
           </div>
         )}
 

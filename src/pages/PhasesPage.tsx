@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useROIStore } from '../store/roiStore';
-import type { Phase, PhaseMonthDelta } from '../types/models';
+import type { Phase, PhaseMonthDelta, LaneTypeDef } from '../types/models';
 
 function monthLabel(startDate: string, idx: number): string {
   const d = new Date(startDate);
@@ -11,56 +11,66 @@ function monthLabel(startDate: string, idx: number): string {
 interface DeltaFormProps {
   startDate: string;
   durationMonths: number;
+  laneTypes: LaneTypeDef[];
   onAdd: (delta: PhaseMonthDelta) => void;
   onCancel: () => void;
 }
 
-function DeltaForm({ startDate, durationMonths, onAdd, onCancel }: DeltaFormProps) {
+function DeltaForm({ startDate, durationMonths, laneTypes, onAdd, onCancel }: DeltaFormProps) {
   const [monthIndex, setMonthIndex] = useState(0);
-  const [pos, setPos] = useState(0);
-  const [sco, setSco] = useState(0);
+  const [counts, setCounts] = useState<Record<string, number>>({});
+
+  function setCount(id: string, val: number) {
+    setCounts((prev) => ({ ...prev, [id]: val }));
+  }
+
+  function handleAdd() {
+    const laneDeltas = laneTypes
+      .filter((lt) => (counts[lt.id] ?? 0) > 0)
+      .map((lt) => ({ laneTypeId: lt.id, added: counts[lt.id] }));
+    onAdd({ monthIndex, laneDeltas });
+  }
 
   return (
     <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 space-y-3">
-      <div className="grid grid-cols-3 gap-3">
-        <div>
-          <label className="block text-xs font-medium text-gray-600 mb-1">Month</label>
-          <select
-            className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"
-            value={monthIndex}
-            onChange={(e) => setMonthIndex(parseInt(e.target.value))}
-          >
-            {Array.from({ length: durationMonths }, (_, i) => (
-              <option key={i} value={i}>{monthLabel(startDate, i)}</option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <label className="block text-xs font-medium text-gray-600 mb-1">POS Lanes Added</label>
-          <input
-            type="number"
-            className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"
-            value={pos}
-            onChange={(e) => setPos(parseInt(e.target.value) || 0)}
-            min={0}
-          />
-        </div>
-        <div>
-          <label className="block text-xs font-medium text-gray-600 mb-1">SCO Lanes Added</label>
-          <input
-            type="number"
-            className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"
-            value={sco}
-            onChange={(e) => setSco(parseInt(e.target.value) || 0)}
-            min={0}
-          />
-        </div>
+      <div>
+        <label className="block text-xs font-medium text-gray-600 mb-1">Month</label>
+        <select
+          className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"
+          value={monthIndex}
+          onChange={(e) => setMonthIndex(parseInt(e.target.value))}
+        >
+          {Array.from({ length: durationMonths }, (_, i) => (
+            <option key={i} value={i}>{monthLabel(startDate, i)}</option>
+          ))}
+        </select>
       </div>
+
+      {laneTypes.length === 0 ? (
+        <p className="text-xs text-amber-600">Add lane types in Settings before creating migration events.</p>
+      ) : (
+        <div className={`grid gap-3 grid-cols-${Math.min(laneTypes.length, 3)}`}>
+          {laneTypes.map((lt) => (
+            <div key={lt.id}>
+              <label className="block text-xs font-medium text-gray-600 mb-1">{lt.name} lanes added</label>
+              <input
+                type="number"
+                className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"
+                value={counts[lt.id] ?? 0}
+                onChange={(e) => setCount(lt.id, parseInt(e.target.value) || 0)}
+                min={0}
+              />
+            </div>
+          ))}
+        </div>
+      )}
+
       <div className="flex justify-end gap-2">
         <button onClick={onCancel} className="px-3 py-1.5 text-sm text-gray-600 border border-gray-300 rounded hover:bg-gray-100">Cancel</button>
         <button
-          onClick={() => onAdd({ monthIndex, posLanesAdded: pos, scoLanesAdded: sco })}
-          className="px-3 py-1.5 text-sm bg-indigo-600 text-white rounded hover:bg-indigo-700"
+          onClick={handleAdd}
+          disabled={laneTypes.length === 0}
+          className="px-3 py-1.5 text-sm bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:opacity-50"
         >
           Add Migration Event
         </button>
@@ -73,14 +83,20 @@ interface PhaseCardProps {
   phase: Phase;
   startDate: string;
   durationMonths: number;
+  laneTypes: LaneTypeDef[];
   onAddDelta: (delta: PhaseMonthDelta) => void;
   onDeleteDelta: (monthIndex: number) => void;
   onUpdateDelta: (monthIndex: number, updates: Partial<PhaseMonthDelta>) => void;
 }
 
-function PhaseCard({ phase, startDate, durationMonths, onAddDelta, onDeleteDelta, onUpdateDelta }: PhaseCardProps) {
+function PhaseCard({ phase, startDate, durationMonths, laneTypes, onAddDelta, onDeleteDelta, onUpdateDelta }: PhaseCardProps) {
   const [showForm, setShowForm] = useState(false);
   const [editingIdx, setEditingIdx] = useState<number | null>(null);
+
+  const totalByType = laneTypes.map((lt) => ({
+    lt,
+    total: phase.monthDeltas.reduce((s, d) => s + (d.laneDeltas.find((x) => x.laneTypeId === lt.id)?.added ?? 0), 0),
+  })).filter((x) => x.total > 0);
 
   return (
     <div className="border border-gray-200 rounded-xl overflow-hidden">
@@ -89,10 +105,13 @@ function PhaseCard({ phase, startDate, durationMonths, onAddDelta, onDeleteDelta
         <h3 className="font-semibold text-gray-900">{phase.name}</h3>
         <span className="text-xs text-gray-500 capitalize">{phase.type}</span>
         <div className="ml-auto flex items-center gap-2 text-xs text-gray-500">
-          <span>{phase.monthDeltas.reduce((s, d) => s + d.posLanesAdded, 0)} POS</span>
-          <span>•</span>
-          <span>{phase.monthDeltas.reduce((s, d) => s + d.scoLanesAdded, 0)} SCO</span>
-          <span>migrated total</span>
+          {totalByType.length > 0
+            ? totalByType.map(({ lt, total }) => (
+                <span key={lt.id}>{total.toLocaleString()} {lt.name}</span>
+              ))
+            : <span>no lanes migrated</span>
+          }
+          {totalByType.length > 0 && <span>migrated total</span>}
         </div>
       </div>
 
@@ -105,25 +124,26 @@ function PhaseCard({ phase, startDate, durationMonths, onAddDelta, onDeleteDelta
           <div key={delta.monthIndex}>
             {editingIdx === delta.monthIndex ? (
               <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 space-y-3">
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">POS Lanes Added</label>
-                    <input
-                      type="number"
-                      className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"
-                      defaultValue={delta.posLanesAdded}
-                      onChange={(e) => onUpdateDelta(delta.monthIndex, { posLanesAdded: parseInt(e.target.value) || 0 })}
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">SCO Lanes Added</label>
-                    <input
-                      type="number"
-                      className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"
-                      defaultValue={delta.scoLanesAdded}
-                      onChange={(e) => onUpdateDelta(delta.monthIndex, { scoLanesAdded: parseInt(e.target.value) || 0 })}
-                    />
-                  </div>
+                <div className={`grid gap-3 grid-cols-${Math.min(laneTypes.length, 3)}`}>
+                  {laneTypes.map((lt) => {
+                    const existing = delta.laneDeltas.find((x) => x.laneTypeId === lt.id);
+                    return (
+                      <div key={lt.id}>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">{lt.name} lanes added</label>
+                        <input
+                          type="number"
+                          className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm"
+                          defaultValue={existing?.added ?? 0}
+                          onChange={(e) => {
+                            const val = parseInt(e.target.value) || 0;
+                            const newLaneDeltas = delta.laneDeltas.filter((x) => x.laneTypeId !== lt.id);
+                            if (val > 0) newLaneDeltas.push({ laneTypeId: lt.id, added: val });
+                            onUpdateDelta(delta.monthIndex, { laneDeltas: newLaneDeltas });
+                          }}
+                        />
+                      </div>
+                    );
+                  })}
                 </div>
                 <button onClick={() => setEditingIdx(null)} className="px-3 py-1.5 text-sm bg-indigo-600 text-white rounded hover:bg-indigo-700">Done</button>
               </div>
@@ -132,10 +152,18 @@ function PhaseCard({ phase, startDate, durationMonths, onAddDelta, onDeleteDelta
                 <div className="text-sm font-medium text-gray-700 w-24 shrink-0">
                   {monthLabel(startDate, delta.monthIndex)}
                 </div>
-                <div className="flex gap-4 text-sm text-gray-600 flex-1">
-                  {delta.posLanesAdded > 0 && <span className="text-blue-700">+{delta.posLanesAdded} POS</span>}
-                  {delta.scoLanesAdded > 0 && <span className="text-purple-700">+{delta.scoLanesAdded} SCO</span>}
-                  {delta.posLanesAdded === 0 && delta.scoLanesAdded === 0 && <span className="text-gray-400">No lanes</span>}
+                <div className="flex gap-3 text-sm text-gray-600 flex-1 flex-wrap">
+                  {delta.laneDeltas.length === 0
+                    ? <span className="text-gray-400">No lanes</span>
+                    : delta.laneDeltas.map((ld) => {
+                        const lt = laneTypes.find((x) => x.id === ld.laneTypeId);
+                        return (
+                          <span key={ld.laneTypeId} className="text-blue-700">
+                            +{ld.added.toLocaleString()} {lt?.name ?? ld.laneTypeId}
+                          </span>
+                        );
+                      })
+                  }
                 </div>
                 <div className="flex gap-1">
                   <button onClick={() => setEditingIdx(delta.monthIndex)} className="p-1.5 text-gray-400 hover:text-indigo-600 rounded">
@@ -154,6 +182,7 @@ function PhaseCard({ phase, startDate, durationMonths, onAddDelta, onDeleteDelta
           <DeltaForm
             startDate={startDate}
             durationMonths={durationMonths}
+            laneTypes={laneTypes}
             onAdd={(delta) => { onAddDelta(delta); setShowForm(false); }}
             onCancel={() => setShowForm(false)}
           />
@@ -173,6 +202,7 @@ function PhaseCard({ phase, startDate, durationMonths, onAddDelta, onDeleteDelta
 
 export function PhasesPage() {
   const { project, addPhaseMonthDelta, deletePhaseMonthDelta, updatePhaseMonthDelta } = useROIStore();
+  const laneTypes = project.config.laneTypes;
 
   return (
     <div className="p-6 space-y-4 max-w-4xl mx-auto">
@@ -183,12 +213,19 @@ export function PhasesPage() {
         </p>
       </div>
 
+      {laneTypes.length === 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-800">
+          No lane types defined. Go to <strong>Settings</strong> to add lane types before creating migration events.
+        </div>
+      )}
+
       {project.phases.map((phase) => (
         <PhaseCard
           key={phase.id}
           phase={phase}
           startDate={project.config.startDate}
           durationMonths={project.config.durationMonths}
+          laneTypes={laneTypes}
           onAddDelta={(delta) => addPhaseMonthDelta(phase.id, delta)}
           onDeleteDelta={(m) => deletePhaseMonthDelta(phase.id, m)}
           onUpdateDelta={(m, updates) => updatePhaseMonthDelta(phase.id, m, updates)}

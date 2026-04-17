@@ -6,15 +6,16 @@ function formatMonthLabel(startDate: string, monthIndex: number): string {
   return d.toLocaleDateString('en-AU', { month: 'short', year: 'numeric' });
 }
 
-function buildLaneMigrationMap(phases: Phase[]): Map<number, { pos: number; sco: number }> {
-  const map = new Map<number, { pos: number; sco: number }>();
+function buildLaneMigrationMap(phases: Phase[]): Map<number, Record<string, number>> {
+  const map = new Map<number, Record<string, number>>();
   for (const phase of phases) {
     for (const delta of phase.monthDeltas) {
-      const existing = map.get(delta.monthIndex) ?? { pos: 0, sco: 0 };
-      map.set(delta.monthIndex, {
-        pos: existing.pos + delta.posLanesAdded,
-        sco: existing.sco + delta.scoLanesAdded,
-      });
+      const existing = map.get(delta.monthIndex) ?? {};
+      const merged = { ...existing };
+      for (const ld of delta.laneDeltas) {
+        merged[ld.laneTypeId] = (merged[ld.laneTypeId] ?? 0) + ld.added;
+      }
+      map.set(delta.monthIndex, merged);
     }
   }
   return map;
@@ -28,8 +29,8 @@ interface CostResult {
 
 function costForItem(
   item: CostItem,
-  posLanesForPlatform: number,
-  scoLanesForPlatform: number,
+  newLanes: Record<string, number>,
+  existingLanes: Record<string, number>,
   monthIndex: number,
 ): CostResult {
   if (!item.enabled) return { amount: 0 };
@@ -45,21 +46,17 @@ function costForItem(
     return { amount: monthlyPrice, unitPrice: monthlyPrice };
   }
 
-  // per-lane
-  let lanes = 0;
-  if (item.laneType === 'POS') lanes = posLanesForPlatform;
-  else if (item.laneType === 'SCO') lanes = scoLanesForPlatform;
-  else if (item.laneType === 'both') lanes = posLanesForPlatform + scoLanesForPlatform;
+  const lanesForPlatform = item.platform === 'existing' ? existingLanes : newLanes;
+  const lanes = item.laneTypeId ? (lanesForPlatform[item.laneTypeId] ?? 0) : 0;
 
   return { amount: monthlyPrice * lanes, lanes, unitPrice: monthlyPrice };
 }
 
-/** Compute the full-lanes baseline cost for existing platform (what you'd pay with no migration) */
-function computeBaselineCost(costItems: CostItem[], totalPos: number, totalSco: number): number {
+function computeBaselineCost(costItems: CostItem[], totalLanes: Record<string, number>): number {
   let total = 0;
   for (const item of costItems) {
     if (item.platform !== 'existing' || !item.enabled || item.oneOff) continue;
-    const result = costForItem(item, totalPos, totalSco, -1);
+    const result = costForItem(item, {}, totalLanes, -1);
     total += result.amount;
   }
   return total;
@@ -67,25 +64,30 @@ function computeBaselineCost(costItems: CostItem[], totalPos: number, totalSco: 
 
 export function computeTimeline(project: ROIProject): Timeline {
   const { config, costItems, phases } = project;
+  const { laneTypes, totalLanes } = config;
   const migrationMap = buildLaneMigrationMap(phases);
 
-  const baselineCostPerMonth = computeBaselineCost(costItems, config.totalPosLanes, config.totalScoLanes);
+  const baselineCostPerMonth = computeBaselineCost(costItems, totalLanes);
 
-  let newPosLanes = 0;
-  let newScoLanes = 0;
+  const newLanes: Record<string, number> = {};
+  for (const lt of laneTypes) newLanes[lt.id] = 0;
+
   let cumulativeSavings = 0;
-
   const rows: MonthlyRow[] = [];
 
   for (let m = 0; m < config.durationMonths; m++) {
     const migration = migrationMap.get(m);
     if (migration) {
-      newPosLanes = Math.min(newPosLanes + migration.pos, config.totalPosLanes);
-      newScoLanes = Math.min(newScoLanes + migration.sco, config.totalScoLanes);
+      for (const lt of laneTypes) {
+        const added = migration[lt.id] ?? 0;
+        newLanes[lt.id] = Math.min((newLanes[lt.id] ?? 0) + added, totalLanes[lt.id] ?? 0);
+      }
     }
 
-    const existingPosLanes = Math.max(0, config.totalPosLanes - newPosLanes);
-    const existingScoLanes = Math.max(0, config.totalScoLanes - newScoLanes);
+    const existingLanes: Record<string, number> = {};
+    for (const lt of laneTypes) {
+      existingLanes[lt.id] = Math.max(0, (totalLanes[lt.id] ?? 0) - (newLanes[lt.id] ?? 0));
+    }
 
     let existingCost = 0;
     let newCost = 0;
@@ -93,10 +95,7 @@ export function computeTimeline(project: ROIProject): Timeline {
     const newBreakdown: CostLineItem[] = [];
 
     for (const item of costItems) {
-      const posLanes = item.platform === 'existing' ? existingPosLanes : newPosLanes;
-      const scoLanes = item.platform === 'existing' ? existingScoLanes : newScoLanes;
-      const result = costForItem(item, posLanes, scoLanes, m);
-
+      const result = costForItem(item, { ...newLanes }, existingLanes, m);
       if (result.amount === 0) continue;
 
       const lineItem: CostLineItem = {
@@ -118,17 +117,14 @@ export function computeTimeline(project: ROIProject): Timeline {
       }
     }
 
-    // Savings = what you would have paid (baseline) minus what you're actually paying (existing + new)
     const savings = baselineCostPerMonth - (existingCost + newCost);
     cumulativeSavings += savings;
 
     rows.push({
       monthIndex: m,
       label: formatMonthLabel(config.startDate, m),
-      newPosLanes,
-      newScoLanes,
-      existingPosLanes,
-      existingScoLanes,
+      newLanes: { ...newLanes },
+      existingLanes,
       existingCost,
       newCost,
       baselineCost: baselineCostPerMonth,
@@ -160,8 +156,8 @@ export interface AggregatedRow {
   existingCost: number;
   newCost: number;
   baselineCost: number;
-  savings: number; // positive = saving vs baseline
-  cumulativeSavings: number; // running total at end of this period
+  savings: number;
+  cumulativeSavings: number;
 }
 
 export function aggregateTimeline(rows: MonthlyRow[], period: PeriodView): AggregatedRow[] {

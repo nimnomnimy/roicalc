@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { CostItem } from '../types/models';
+import { useROIStore } from '../store/roiStore';
 import { CostItemForm } from './CostItemForm';
 import { formatCurrency } from '../utils/format';
 
@@ -9,9 +10,9 @@ interface Props {
   onDelete: () => void;
 }
 
-const laneLabel = { POS: 'POS', SCO: 'SCO', both: 'POS+SCO' };
-
 export function CostItemRow({ item, onUpdate, onDelete }: Props) {
+  const { project } = useROIStore();
+  const laneTypes = project.config.laneTypes;
   const [editing, setEditing] = useState(false);
 
   if (editing) {
@@ -32,6 +33,10 @@ export function CostItemRow({ item, onUpdate, onDelete }: Props) {
     ? `${formatCurrency(item.unitPrice)}/yr`
     : `${formatCurrency(item.unitPrice)}/mo`;
 
+  const laneName = item.laneTypeId
+    ? (laneTypes.find((lt) => lt.id === item.laneTypeId)?.name ?? item.laneTypeId)
+    : '—';
+
   return (
     <div className={`flex items-center gap-3 px-3 py-2 rounded-lg border ${item.enabled ? 'border-gray-200 bg-white' : 'border-gray-100 bg-gray-50 opacity-60'}`}>
       <input
@@ -51,7 +56,7 @@ export function CostItemRow({ item, onUpdate, onDelete }: Props) {
           )}
         </div>
         <div className="flex gap-3 mt-0.5 text-xs text-gray-500">
-          <span>{item.costType === 'per-lane' ? `${laneLabel[item.laneType ?? 'POS']} × ${priceLabel}` : `flat ${priceLabel}`}</span>
+          <span>{item.costType === 'per-lane' ? `${laneName} × ${priceLabel}` : `flat ${priceLabel}`}</span>
           {(item.discountPct ?? 0) > 0 && (
             <span className="text-green-600">
               → {formatCurrency(
