@@ -1,4 +1,4 @@
-import { useState, useMemo, Fragment } from 'react';
+import { useState, useMemo, Fragment, useRef, useEffect } from 'react';
 import { CostsPage } from './pages/CostsPage';
 import { PhasesPage } from './pages/PhasesPage';
 import { ChartPage } from './pages/ChartPage';
@@ -7,6 +7,7 @@ import { SettingsPage } from './pages/SettingsPage';
 import { useROIStore } from './store/roiStore';
 import { exportToExcel } from './export/excelExporter';
 import { importFromExcel } from './export/excelImporter';
+import type { ROIProject } from './types/models';
 import { computeTimeline } from './engine/timelineEngine';
 
 type Tab = 'chart' | 'table' | 'costs' | 'phases' | 'settings';
@@ -41,15 +42,67 @@ function downloadHtml(html: string) {
   URL.revokeObjectURL(a.href);
 }
 
-function ExportHtmlButton() {
-  const [state, setState] = useState<'idle' | 'building' | 'error'>('idle');
+function importFromHtml(file: File): Promise<ROIProject> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const html = e.target!.result as string;
+        const marker = 'localStorage.setItem("roi-planner-v1",';
+        const markerIdx = html.indexOf(marker);
+        if (markerIdx === -1) throw new Error('No ROI Planner data found in this HTML file');
+        // The second argument starts immediately after the marker — it's a JSON string literal.
+        // Walk past the opening quote, then find the matching close using JSON.parse on growing slices.
+        const afterMarker = html.slice(markerIdx + marker.length).trimStart();
+        // afterMarker starts with a JSON-encoded string: "\"...\""
+        // Use JSON.parse progressively isn't reliable; instead find the end of the JSON string token.
+        // Since the value was produced by JSON.stringify(storeData) it's a well-formed JSON string
+        // starting with " and ending with " followed by );
+        // We scan for the closing quote that isn't escaped.
+        if (afterMarker[0] !== '"') throw new Error('Unexpected format in HTML bootstrap');
+        let i = 1;
+        while (i < afterMarker.length) {
+          if (afterMarker[i] === '\\') { i += 2; continue; }
+          if (afterMarker[i] === '"') break;
+          i++;
+        }
+        const outerJson = afterMarker.slice(0, i + 1); // includes surrounding quotes
+        const innerStr = JSON.parse(outerJson) as string;
+        const stored = JSON.parse(innerStr) as { state?: { project?: ROIProject } };
+        const project = stored?.state?.project;
+        if (!project) throw new Error('Could not read project data from HTML file');
+        resolve(project);
+      } catch (err) {
+        reject(err instanceof Error ? err : new Error(String(err)));
+      }
+    };
+    reader.onerror = () => reject(new Error('Failed to read file'));
+    reader.readAsText(file);
+  });
+}
 
-  async function handleExport() {
-    setState('building');
+import type { Timeline } from './types/models';
+
+function TransferDropdown({ project, timeline }: { project: ROIProject; timeline: Timeline }) {
+  const { importProject } = useROIStore();
+  const [open, setOpen] = useState(false);
+  const [htmlState, setHtmlState] = useState<'idle' | 'building' | 'error'>('idle');
+  const [warnings, setWarnings] = useState<string[]>([]);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, []);
+
+  async function handleExportHtml() {
+    setOpen(false);
+    setHtmlState('building');
     try {
       if (IS_DEV) {
-        // In dev: Vite serves non-inlined assets so we need the build server
-        // to produce a proper single-file bundle, then we inject the data.
         const storeData = localStorage.getItem(STORAGE_KEY) ?? '';
         const res = await fetch(`${BUILD_SERVER}/build`, {
           method: 'POST',
@@ -57,7 +110,6 @@ function ExportHtmlButton() {
           body: JSON.stringify({ storeData }),
         });
         if (!res.ok) throw new Error(await res.text());
-        // Build server already injects the bootstrap, just download
         const blob = await res.blob();
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
@@ -65,12 +117,9 @@ function ExportHtmlButton() {
         a.click();
         URL.revokeObjectURL(a.href);
       } else {
-        // On Cloudflare (or file://) — fetch the page's own URL to get the
-        // clean inlined HTML, inject the data bootstrap, download.
         const url = window.location.protocol === 'file:'
-          ? null  // can't fetch file:// — fall back to DOM
+          ? null
           : window.location.href.split('?')[0].split('#')[0];
-
         let html: string;
         if (url) {
           const res = await fetch(url);
@@ -80,91 +129,102 @@ function ExportHtmlButton() {
         }
         downloadHtml(injectBootstrap(html));
       }
-      setState('idle');
+      setHtmlState('idle');
     } catch {
-      setState('error');
-      setTimeout(() => setState('idle'), 3000);
+      setHtmlState('error');
+      setTimeout(() => setHtmlState('idle'), 3000);
     }
   }
 
-  const label = IS_DEV ? 'Export HTML' : 'Download HTML';
+  function handleExportExcel() {
+    setOpen(false);
+    exportToExcel(project, timeline);
+  }
+
+  function handleImportFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = '';
+    setOpen(false);
+
+    if (file.name.endsWith('.html')) {
+      importFromHtml(file)
+        .then((proj) => importProject(proj))
+        .catch((err) => alert(`Import failed: ${err.message}`));
+    } else {
+      importFromExcel(file)
+        .then(({ project: proj, warnings }) => {
+          importProject(proj);
+          setWarnings(warnings);
+        })
+        .catch((err) => alert(`Import failed: ${err.message}`));
+    }
+  }
+
+  const busy = htmlState === 'building';
 
   return (
-    <button
-      onClick={handleExport}
-      disabled={state === 'building'}
-      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-indigo-600 text-white hover:bg-indigo-700 transition-colors disabled:opacity-60 disabled:cursor-wait"
-    >
-      {state === 'building' ? (
-        <>
+    <div className="relative" ref={ref}>
+      <button
+        onClick={() => setOpen((o) => !o)}
+        disabled={busy}
+        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-indigo-600 text-white hover:bg-indigo-700 transition-colors disabled:opacity-60 disabled:cursor-wait"
+      >
+        {busy ? (
           <svg className="w-4 h-4 shrink-0 animate-spin" fill="none" viewBox="0 0 24 24">
             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
           </svg>
-          {IS_DEV ? 'Building…' : 'Downloading…'}
-        </>
-      ) : state === 'error' ? (
-        <>
+        ) : (
           <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
           </svg>
-          Failed
-        </>
-      ) : (
-        <>
-          <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-          </svg>
-          {label}
-        </>
-      )}
-    </button>
-  );
-}
-
-function ImportExcelButton() {
-  const { importProject } = useROIStore();
-  const [state, setState] = useState<'idle' | 'error'>('idle');
-  const [warnings, setWarnings] = useState<string[]>([]);
-
-  function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    e.target.value = ''; // reset so same file can be re-imported
-    importFromExcel(file)
-      .then(({ project, warnings }) => {
-        importProject(project);
-        setWarnings(warnings);
-        setState('idle');
-      })
-      .catch((err) => {
-        alert(`Import failed: ${err.message}`);
-        setState('error');
-        setTimeout(() => setState('idle'), 3000);
-      });
-  }
-
-  return (
-    <div className="relative">
-      <label
-        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium cursor-pointer transition-colors ${
-          state === 'error'
-            ? 'bg-red-600 text-white'
-            : 'bg-white border border-gray-300 text-gray-700 hover:bg-gray-50'
-        }`}
-        title="Import from Excel (.xlsx)"
-      >
-        <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+        )}
+        {busy ? 'Building…' : 'Import / Export'}
+        <svg className="w-3 h-3 shrink-0 opacity-70" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
         </svg>
-        {state === 'error' ? 'Failed' : 'Import Excel'}
-        <input type="file" accept=".xlsx" className="hidden" onChange={handleFile} />
-      </label>
-      {warnings.length > 0 && (
-        <div className="absolute right-0 top-10 z-50 bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-800 w-72 shadow-lg">
-          <div className="font-semibold mb-1">Import warnings:</div>
-          {warnings.map((w, i) => <div key={i}>• {w}</div>)}
-          <button onClick={() => setWarnings([])} className="mt-2 text-amber-600 underline">Dismiss</button>
+      </button>
+
+      {open && (
+        <div className="absolute right-0 top-10 z-50 bg-white border border-gray-200 rounded-xl shadow-lg w-52 py-1 text-sm">
+          <div className="px-3 py-1.5 text-xs font-semibold text-gray-400 uppercase tracking-wide">Download</div>
+          <button
+            onClick={handleExportHtml}
+            className="w-full text-left px-3 py-2 hover:bg-gray-50 flex items-center gap-2 text-gray-700"
+          >
+            <svg className="w-4 h-4 text-indigo-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+            </svg>
+            {IS_DEV ? 'Export HTML' : 'Download HTML'}
+          </button>
+          <button
+            onClick={handleExportExcel}
+            className="w-full text-left px-3 py-2 hover:bg-gray-50 flex items-center gap-2 text-gray-700"
+          >
+            <svg className="w-4 h-4 text-emerald-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+            </svg>
+            Export Excel
+          </button>
+
+          <div className="border-t border-gray-100 my-1" />
+          <div className="px-3 py-1.5 text-xs font-semibold text-gray-400 uppercase tracking-wide">Upload</div>
+          <label className="w-full text-left px-3 py-2 hover:bg-gray-50 flex items-center gap-2 text-gray-700 cursor-pointer">
+            <svg className="w-4 h-4 text-gray-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+            </svg>
+            Import HTML / Excel
+            <input type="file" accept=".xlsx,.html" className="hidden" onChange={handleImportFile} />
+          </label>
+
+          {warnings.length > 0 && (
+            <div className="mx-2 mb-2 mt-1 bg-amber-50 border border-amber-200 rounded-lg p-2 text-xs text-amber-800">
+              <div className="font-semibold mb-1">Import warnings:</div>
+              {warnings.map((w, i) => <div key={i}>• {w}</div>)}
+              <button onClick={() => setWarnings([])} className="mt-1 text-amber-600 underline">Dismiss</button>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -214,19 +274,7 @@ export default function App() {
           ))}
           <span className="text-xs text-gray-400">{project.config.durationMonths} months</span>
 
-          <ImportExcelButton />
-
-          <button
-            onClick={() => exportToExcel(project, timeline)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-emerald-600 text-white hover:bg-emerald-700 transition-colors"
-          >
-            <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-            </svg>
-            Export Excel
-          </button>
-
-          <ExportHtmlButton />
+          <TransferDropdown project={project} timeline={timeline} />
         </div>
       </header>
 
